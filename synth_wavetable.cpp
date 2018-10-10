@@ -79,9 +79,10 @@ void AudioSynthWavetable::stop(void) {
 	cli();
 	if (env_state != STATE_IDLE) {
 		env_state = STATE_RELEASE;
-		env_count = current_sample->RELEASE_COUNT;
+		env_count = current_sample->RELEASE_COUNT / 10;
 		if (env_count == 0) env_count = 1;
-		env_incr = -(env_mult) / (env_count * ENVELOPE_PERIOD);
+		env_incr = - env_mult * 0.7 / (env_count * ENVELOPE_PERIOD);
+		env_iter = 10;
 	}
 	PRINT_ENV(STATE_RELEASE);
 	sei();
@@ -126,7 +127,7 @@ void AudioSynthWavetable::setState(int note, int amp, float freq) {
 		return;
 	}
 	setFrequency(freq);
-	vib_count = mod_count = tone_phase = env_incr = env_mult = 0;
+	vib_count = mod_count = tone_phase = env_incr = env_mult = env_iter = 0;
 	vib_phase = mod_phase = TRIANGLE_INITIAL_PHASE;
 	env_count = current_sample->DELAY_COUNT;
 	// linear scalar for amp with UINT16_MAX being no attenuation
@@ -181,6 +182,7 @@ void AudioSynthWavetable::update(void) {
 	int32_t env_count = this->env_count;
 	int32_t env_mult = this->env_mult;
 	int32_t env_incr = this->env_incr;
+	int32_t env_iter = this->env_iter;
 
 	uint32_t vib_count = this->vib_count;
 	uint32_t vib_phase = this->vib_phase;
@@ -346,25 +348,42 @@ void AudioSynthWavetable::update(void) {
 			continue;
 		case STATE_HOLD:
 			env_state = STATE_DECAY;
-			env_count = s->DECAY_COUNT;
-			env_incr = (-s->SUSTAIN_MULT) / (env_count * ENVELOPE_PERIOD);
+			env_count = s->DECAY_COUNT / 10;
+			env_incr = env_mult * (powf(float(UNITY_GAIN - s->SUSTAIN_MULT)/UNITY_GAIN, 0.1) - 1.0f) / (env_count * ENVELOPE_PERIOD);
+			env_iter = 10;
 			PRINT_ENV(STATE_DECAY);
 			continue;
 		case STATE_DECAY:
-			env_mult = UNITY_GAIN - s->SUSTAIN_MULT;
-			// UINT16_MAX is a value approximately corresponding to the -100 dBFS defined in the SoundFont spec as full attenuation
-			// hence this comparison either sends the state to indefinite STATE_SUSTAIN, or immediately into STATE_RELEASE -> STATE_IDLE
-			env_state = env_mult < UNITY_GAIN / UINT16_MAX ? STATE_RELEASE : STATE_SUSTAIN;
-			env_incr = 0;
+			if (--env_iter > 0) {
+				env_count = s->DECAY_COUNT / 10;
+				env_incr = env_mult * (powf(float(UNITY_GAIN - s->SUSTAIN_MULT)/UNITY_GAIN, 0.1) - 1.0f) / (env_count * ENVELOPE_PERIOD);
+				PRINT_ENV(STATE_DECAY);
+			}
+			else {
+				env_mult = UNITY_GAIN - s->SUSTAIN_MULT;
+				// UINT16_MAX is a value approximately corresponding to the -100 dBFS defined in the SoundFont spec as full attenuation
+				// hence this comparison either sends the state to indefinite STATE_SUSTAIN, or immediately into STATE_RELEASE -> STATE_IDLE
+				env_state = env_mult < UNITY_GAIN / UINT16_MAX ? STATE_RELEASE : STATE_SUSTAIN;
+				env_incr = 0;
+				PRINT_ENV(STATE_SUSTAIN);
+			}
 			continue;
 		case STATE_SUSTAIN:
 			env_count = INT32_MAX;
 			PRINT_ENV(STATE_SUSTAIN);
 			continue;
 		case STATE_RELEASE:
-			env_state = STATE_IDLE;
-			for (; p < end; ++p) *p = 0;
-			PRINT_ENV(STATE_IDLE);
+			if (--env_iter > 0) {
+				env_count = s->RELEASE_COUNT / 10;
+				if (env_count == 0) env_count = 1;
+				env_incr = - env_mult * 0.7 / (env_count * ENVELOPE_PERIOD);
+				PRINT_ENV(STATE_RELEASE);
+			}
+			else {
+				env_state = STATE_IDLE;
+				for (; p < end; ++p) *p = 0;
+				PRINT_ENV(STATE_IDLE);
+			}
 			continue;
 		default:
 			p = end;
@@ -406,6 +425,7 @@ void AudioSynthWavetable::update(void) {
 		this->env_count = env_count;
 		this->env_mult = env_mult;
 		this->env_incr = env_incr;
+		this->env_iter = env_iter;
 		if (this->env_state != STATE_IDLE) {
 			this->vib_count = vib_count;
 			this->vib_phase = vib_phase;

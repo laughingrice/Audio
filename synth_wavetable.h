@@ -187,6 +187,7 @@ private:
 	volatile int32_t env_count = 0;
 	volatile int32_t env_mult = 0;
 	volatile int32_t env_incr = 0;
+	volatile int32_t env_iter = 0;
 
 	//vibrato LFO state
 	volatile uint32_t vib_count = 0;
